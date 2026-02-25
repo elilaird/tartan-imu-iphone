@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Python 3.11+ with conda (`lio-v` environment)
+- Python 3.11+ with conda (`tartan` environment)
 - PyTorch
 - coremltools (`pip install coremltools`)
 - Xcode 15+ (for iOS deployment)
@@ -83,7 +83,7 @@ for window in imu_windows:  # each [1, 1, 6, 200]
 ## 3. Exporting to CoreML
 
 ```bash
-conda activate lio-v
+conda activate tartan
 python -m tartanimu.export.to_coreml checkpoints/tartanimu_car.pt --head car
 ```
 
@@ -113,7 +113,7 @@ Produces `tartanimu_car_q8.mlpackage`.
 ## 4. Running Tests
 
 ```bash
-conda activate lio-v
+conda activate tartan
 python -m pytest tests/ -v
 ```
 
