@@ -1,9 +1,8 @@
 import CoreML
 import Foundation
 import QuartzCore
-import simd
 
-/// Runs TartanIMU CoreML inference with persistent LSTM state.
+/// Runs TartanIMU CoreML inference on live IMU data and tracks performance metrics.
 class TartanIMURunner: ObservableObject {
 
     private var model: MLModel?
@@ -13,20 +12,40 @@ class TartanIMURunner: ObservableObject {
     private var hiddenState: MLMultiArray
     private var cellState: MLMultiArray
 
-    // Performance tracking
+    // EKF
+    private let ekf = EKF(dt: 1.0)
+
+    // --- Performance metrics ---
+
+    /// Rolling window of per-call latencies (model only)
+    @Published var latencyHistory: [Double] = []
+    /// Rolling window of per-call latencies (model + EKF)
+    @Published var ekfLatencyHistory: [Double] = []
+    /// Rolling window of IMU sample rate measurements
+    @Published var sampleRateHistory: [Double] = []
+
+    /// Current values
     @Published var inferenceTimeMs: Double = 0
+    @Published var ekfInferenceTimeMs: Double = 0
     @Published var throughputFPS: Double = 0
-    @Published var velocityEstimate: SIMD3<Float> = .zero
-    @Published var trajectoryPoints: [SIMD2<Float>] = []
-    @Published var velocityHistory: [Float] = []
-    @Published var isRunning = false
     @Published var sampleRate: Double = 0
 
-    private var inferenceTimings = [Double]()
-    private var integratedPos = SIMD3<Float>.zero
+    /// Aggregate stats
+    @Published var minLatencyMs: Double = .infinity
+    @Published var maxLatencyMs: Double = 0
+    @Published var meanLatencyMs: Double = 0
+    @Published var p99LatencyMs: Double = 0
+    @Published var ekfOverheadMs: Double = 0
+    @Published var totalInferences: Int = 0
+    @Published var droppedWindows: Int = 0
+
+    @Published var isRunning = false
+
+    private let historySize = 120
+    private var allLatencies: [Double] = []
+    private var inferenceInProgress = false
 
     init() {
-        // Initialize LSTM hidden states to zero
         hiddenState = try! MLMultiArray(shape: [2, 1, 512], dataType: .float32)
         cellState = try! MLMultiArray(shape: [2, 1, 512], dataType: .float32)
         for i in 0..<hiddenState.count { hiddenState[i] = 0 }
@@ -36,7 +55,6 @@ class TartanIMURunner: ObservableObject {
 
         loadModel()
 
-        // Run inference when a full window is ready
         imuCapture.onWindowReady = { [weak self] window in
             self?.runInference(window: window)
         }
@@ -44,9 +62,8 @@ class TartanIMURunner: ObservableObject {
 
     private func loadModel() {
         let config = MLModelConfiguration()
-        config.computeUnits = .all  // Allow ANE + GPU + CPU
+        config.computeUnits = .all
 
-        // Try to load the compiled model from the app bundle
         guard let modelURL = Bundle.main.url(forResource: "tartanimu_car", withExtension: "mlmodelc") ??
                              Bundle.main.url(forResource: "tartanimu_car", withExtension: "mlpackage") else {
             print("Model not found in bundle. Add tartanimu_car.mlpackage to the Xcode project.")
@@ -64,36 +81,47 @@ class TartanIMURunner: ObservableObject {
     func start() {
         reset()
         imuCapture.start()
-        DispatchQueue.main.async {
-            self.isRunning = true
-        }
+        DispatchQueue.main.async { self.isRunning = true }
     }
 
     func stop() {
         imuCapture.stop()
-        DispatchQueue.main.async {
-            self.isRunning = false
-        }
+        DispatchQueue.main.async { self.isRunning = false }
     }
 
     func reset() {
         for i in 0..<hiddenState.count { hiddenState[i] = 0 }
         for i in 0..<cellState.count { cellState[i] = 0 }
-        integratedPos = .zero
+        ekf.reset()
+        allLatencies = []
+        inferenceInProgress = false
         DispatchQueue.main.async {
-            self.trajectoryPoints = []
-            self.velocityHistory = []
-            self.inferenceTimings = []
-            self.velocityEstimate = .zero
+            self.latencyHistory = []
+            self.ekfLatencyHistory = []
+            self.sampleRateHistory = []
             self.inferenceTimeMs = 0
+            self.ekfInferenceTimeMs = 0
             self.throughputFPS = 0
+            self.sampleRate = 0
+            self.minLatencyMs = .infinity
+            self.maxLatencyMs = 0
+            self.meanLatencyMs = 0
+            self.p99LatencyMs = 0
+            self.ekfOverheadMs = 0
+            self.totalInferences = 0
+            self.droppedWindows = 0
         }
     }
 
     private func runInference(window: [[Float]]) {
         guard let model else { return }
 
-        let startTime = CACurrentMediaTime()
+        // Track if we're falling behind (previous inference still running)
+        if inferenceInProgress {
+            DispatchQueue.main.async { self.droppedWindows += 1 }
+            return
+        }
+        inferenceInProgress = true
 
         // Pack buffer into MLMultiArray [1, 6, 200]
         let imuInput = try! MLMultiArray(shape: [1, 6, 200], dataType: .float32)
@@ -104,65 +132,87 @@ class TartanIMURunner: ObservableObject {
             }
         }
 
-        // Build prediction input
         let inputFeatures = try! MLDictionaryFeatureProvider(dictionary: [
             "imu_window": MLFeatureValue(multiArray: imuInput),
             "hidden": MLFeatureValue(multiArray: hiddenState),
             "cell": MLFeatureValue(multiArray: cellState),
         ])
 
+        // Time model inference only
+        let t0 = CACurrentMediaTime()
         guard let output = try? model.prediction(from: inputFeatures) else {
             print("Inference failed")
+            inferenceInProgress = false
             return
         }
+        let modelMs = (CACurrentMediaTime() - t0) * 1000
 
-        // Update persistent LSTM state
+        // Update LSTM state
         hiddenState = output.featureValue(for: "hidden_out")!.multiArrayValue!
         cellState = output.featureValue(for: "cell_out")!.multiArrayValue!
 
-        // Parse velocity output
-        let velocity = output.featureValue(for: "velocity")!.multiArrayValue!
-        let vx = velocity[[0, 0] as [NSNumber]].floatValue
-        let vy = velocity[[0, 1] as [NSNumber]].floatValue
-        let vz = velocity[[0, 2] as [NSNumber]].floatValue
-
-        let elapsed = (CACurrentMediaTime() - startTime) * 1000  // ms
-
-        // Dead-reckoning integration (1 Hz steps, 1 second per window)
-        integratedPos.x += vx * 1.0
-        integratedPos.y += vy * 1.0
+        // Time model + EKF
+        let t1 = CACurrentMediaTime()
+        let vel = output.featureValue(for: "velocity")!.multiArrayValue!
+        let lcov = output.featureValue(for: "log_covariance")!.multiArrayValue!
+        let z: [Float] = [vel[[0, 0] as [NSNumber]].floatValue,
+                          vel[[0, 1] as [NSNumber]].floatValue,
+                          vel[[0, 2] as [NSNumber]].floatValue]
+        let lc: [Float] = [lcov[[0, 0] as [NSNumber]].floatValue,
+                           lcov[[0, 1] as [NSNumber]].floatValue,
+                           lcov[[0, 2] as [NSNumber]].floatValue]
+        ekf.predict()
+        ekf.update(velocityMeasurement: z, logCovariance: lc)
+        let ekfMs = modelMs + (CACurrentMediaTime() - t1) * 1000
 
         let currentRate = imuCapture.currentSampleRate
 
+        // Update aggregate stats
+        allLatencies.append(modelMs)
+
+        inferenceInProgress = false
+
         DispatchQueue.main.async {
-            self.inferenceTimeMs = elapsed
-            self.velocityEstimate = SIMD3(vx, vy, vz)
-            self.trajectoryPoints.append(SIMD2(self.integratedPos.x, self.integratedPos.y))
+            self.inferenceTimeMs = modelMs
+            self.ekfInferenceTimeMs = ekfMs
             self.sampleRate = currentRate
+            self.totalInferences += 1
 
-            self.velocityHistory.append(vx)
-            if self.velocityHistory.count > 120 {
-                self.velocityHistory.removeFirst()
+            // Rolling histories
+            self.latencyHistory.append(modelMs)
+            if self.latencyHistory.count > self.historySize {
+                self.latencyHistory.removeFirst()
+            }
+            self.ekfLatencyHistory.append(ekfMs)
+            if self.ekfLatencyHistory.count > self.historySize {
+                self.ekfLatencyHistory.removeFirst()
+            }
+            self.sampleRateHistory.append(currentRate)
+            if self.sampleRateHistory.count > self.historySize {
+                self.sampleRateHistory.removeFirst()
             }
 
-            self.inferenceTimings.append(elapsed)
-            if self.inferenceTimings.count > 100 {
-                self.inferenceTimings.removeFirst()
-            }
-            let avgMs = self.inferenceTimings.reduce(0, +) / Double(self.inferenceTimings.count)
-            self.throughputFPS = 1000.0 / avgMs
+            // Aggregate stats from all latencies
+            let sorted = self.allLatencies.sorted()
+            self.minLatencyMs = sorted.first ?? 0
+            self.maxLatencyMs = sorted.last ?? 0
+            self.meanLatencyMs = sorted.reduce(0, +) / Double(sorted.count)
+            self.throughputFPS = 1000.0 / self.meanLatencyMs
+            let p99Idx = min(Int(Double(sorted.count) * 0.99), sorted.count - 1)
+            self.p99LatencyMs = sorted[p99Idx]
+            self.ekfOverheadMs = ekfMs - modelMs
         }
     }
 
     func exportCSV() -> URL? {
-        guard !trajectoryPoints.isEmpty else { return nil }
+        guard !allLatencies.isEmpty else { return nil }
 
         let tempDir = FileManager.default.temporaryDirectory
-        let fileURL = tempDir.appendingPathComponent("tartanimu_trajectory.csv")
+        let fileURL = tempDir.appendingPathComponent("tartanimu_perf.csv")
 
-        var csv = "step,x,y\n"
-        for (i, pt) in trajectoryPoints.enumerated() {
-            csv += "\(i),\(pt.x),\(pt.y)\n"
+        var csv = "step,latency_ms\n"
+        for (i, lat) in allLatencies.enumerated() {
+            csv += "\(i),\(String(format: "%.3f", lat))\n"
         }
 
         do {

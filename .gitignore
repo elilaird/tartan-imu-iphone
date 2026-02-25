@@ -2,3 +2,5 @@
 benchmarks/
 checkpoints/
 .DS_Store
+*/xcuserdata/*
+xcode/TartanIMU Benchmark/TartanIMU Benchmark.xcodeproj/project.xcworkspace/

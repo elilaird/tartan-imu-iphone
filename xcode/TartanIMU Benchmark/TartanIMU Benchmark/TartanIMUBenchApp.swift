@@ -42,8 +42,20 @@ struct BenchmarkView: View {
                     Section("Results") {
                         ForEach(runner.results) { result in
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(result.configName)
-                                    .font(.headline)
+                                HStack {
+                                    Text(result.configName)
+                                        .font(.headline)
+                                    if result.configName.contains("EKF") {
+                                        Text("EKF")
+                                            .font(.caption2)
+                                            .fontWeight(.bold)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(.orange.opacity(0.2))
+                                            .foregroundStyle(.orange)
+                                            .clipShape(Capsule())
+                                    }
+                                }
                                 HStack(spacing: 16) {
                                     VStack(alignment: .leading) {
                                         Text("Mean")

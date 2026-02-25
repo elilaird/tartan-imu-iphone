@@ -12,6 +12,7 @@ class BenchmarkRunner: ObservableObject {
         let id = UUID()
         let name: String
         let computeUnits: MLComputeUnits
+        let withEKF: Bool
     }
 
     struct BenchmarkResult: Identifiable {
@@ -24,10 +25,12 @@ class BenchmarkRunner: ObservableObject {
     }
 
     static let configs: [BenchmarkConfig] = [
-        BenchmarkConfig(name: "ANE+CPU (FP16)", computeUnits: .cpuAndNeuralEngine),
-        BenchmarkConfig(name: "GPU+CPU (FP16)", computeUnits: .cpuAndGPU),
-        BenchmarkConfig(name: "CPU Only", computeUnits: .cpuOnly),
-        BenchmarkConfig(name: "All (ANE+GPU+CPU)", computeUnits: .all),
+        BenchmarkConfig(name: "All (ANE+GPU+CPU)", computeUnits: .all, withEKF: false),
+        BenchmarkConfig(name: "All + EKF", computeUnits: .all, withEKF: true),
+        BenchmarkConfig(name: "ANE+CPU (FP16)", computeUnits: .cpuAndNeuralEngine, withEKF: false),
+        BenchmarkConfig(name: "ANE+CPU + EKF", computeUnits: .cpuAndNeuralEngine, withEKF: true),
+        BenchmarkConfig(name: "GPU+CPU (FP16)", computeUnits: .cpuAndGPU, withEKF: false),
+        BenchmarkConfig(name: "CPU Only", computeUnits: .cpuOnly, withEKF: false),
     ]
 
     @Published var results: [BenchmarkResult] = []
@@ -105,6 +108,8 @@ class BenchmarkRunner: ObservableObject {
         var latencies = [Double]()
         latencies.reserveCapacity(benchmarkIterations)
 
+        let ekf: EKF? = config.withEKF ? EKF(dt: 1.0) : nil
+
         for _ in 0..<benchmarkIterations {
             let input = try! MLDictionaryFeatureProvider(dictionary: [
                 "imu_window": MLFeatureValue(multiArray: imuInput),
@@ -114,6 +119,20 @@ class BenchmarkRunner: ObservableObject {
 
             let start = CACurrentMediaTime()
             if let out = try? model.prediction(from: input) {
+                // Run EKF predict + update if enabled (included in timing)
+                if let ekf {
+                    let vel = out.featureValue(for: "velocity")!.multiArrayValue!
+                    let lcov = out.featureValue(for: "log_covariance")!.multiArrayValue!
+                    let z: [Float] = [vel[[0, 0] as [NSNumber]].floatValue,
+                                      vel[[0, 1] as [NSNumber]].floatValue,
+                                      vel[[0, 2] as [NSNumber]].floatValue]
+                    let lc: [Float] = [lcov[[0, 0] as [NSNumber]].floatValue,
+                                       lcov[[0, 1] as [NSNumber]].floatValue,
+                                       lcov[[0, 2] as [NSNumber]].floatValue]
+                    ekf.predict()
+                    ekf.update(velocityMeasurement: z, logCovariance: lc)
+                }
+
                 let elapsed = (CACurrentMediaTime() - start) * 1000
                 latencies.append(elapsed)
                 hiddenState = out.featureValue(for: "hidden_out")!.multiArrayValue!

@@ -1,86 +1,176 @@
 import SwiftUI
 import Charts
 
-// MARK: - Main Dashboard
+// MARK: - Main Dashboard (Performance-focused)
 
 struct TartanIMUDashboard: View {
     @StateObject private var runner = TartanIMURunner()
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 16) {
+            ScrollView {
+                VStack(spacing: 16) {
 
-                // Metrics bar
-                HStack(spacing: 24) {
-                    MetricTile(
-                        label: "Inference",
-                        value: String(format: "%.1f ms", runner.inferenceTimeMs),
-                        color: runner.inferenceTimeMs < 5 ? .green : .orange
-                    )
-                    MetricTile(
-                        label: "FPS",
-                        value: String(format: "%.0f", runner.throughputFPS),
-                        color: .blue
-                    )
-                    MetricTile(
-                        label: "IMU Hz",
-                        value: String(format: "%.0f", runner.sampleRate),
-                        color: .cyan
-                    )
-                    MetricTile(
-                        label: "Vx",
-                        value: String(format: "%.2f m/s", runner.velocityEstimate.x),
-                        color: .purple
-                    )
-                }
-                .padding(.horizontal)
-
-                // 2D Trajectory Canvas
-                TrajectoryCanvas(points: runner.trajectoryPoints)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 300)
-                    .background(Color(.systemGroupedBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 16))
-                    .padding(.horizontal)
-
-                // Velocity time-series chart
-                if !runner.velocityHistory.isEmpty {
-                    Chart(runner.velocityHistory.indices, id: \.self) { i in
-                        LineMark(
-                            x: .value("t", i),
-                            y: .value("Vx", runner.velocityHistory[i])
+                    // Top metrics bar
+                    HStack(spacing: 12) {
+                        MetricTile(
+                            label: "Model",
+                            value: String(format: "%.2f ms", runner.inferenceTimeMs),
+                            color: runner.inferenceTimeMs < 5 ? .green : .orange
                         )
-                        .foregroundStyle(.blue)
+                        MetricTile(
+                            label: "+EKF",
+                            value: String(format: "%.2f ms", runner.ekfInferenceTimeMs),
+                            color: .orange
+                        )
+                        MetricTile(
+                            label: "FPS",
+                            value: String(format: "%.0f", runner.throughputFPS),
+                            color: .blue
+                        )
+                        MetricTile(
+                            label: "IMU Hz",
+                            value: String(format: "%.0f", runner.sampleRate),
+                            color: .cyan
+                        )
+                        MetricTile(
+                            label: "Calls",
+                            value: "\(runner.totalInferences)",
+                            color: .primary
+                        )
                     }
-                    .frame(height: 120)
                     .padding(.horizontal)
-                }
 
-                Spacer()
+                    // Latency time-series: model vs model+EKF
+                    if !runner.latencyHistory.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Inference Latency")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal)
 
-                // Controls
-                HStack(spacing: 16) {
-                    if runner.isRunning {
-                        Button("Stop") { runner.stop() }
-                            .buttonStyle(.borderedProminent)
-                            .tint(.red)
-                    } else {
-                        Button("Start") { runner.start() }
-                            .buttonStyle(.borderedProminent)
+                            Chart {
+                                ForEach(runner.latencyHistory.indices, id: \.self) { i in
+                                    LineMark(
+                                        x: .value("Step", i),
+                                        y: .value("ms", runner.latencyHistory[i]),
+                                        series: .value("Source", "Model")
+                                    )
+                                    .foregroundStyle(.blue)
+                                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+                                }
+                                ForEach(runner.ekfLatencyHistory.indices, id: \.self) { i in
+                                    LineMark(
+                                        x: .value("Step", i),
+                                        y: .value("ms", runner.ekfLatencyHistory[i]),
+                                        series: .value("Source", "Model + EKF")
+                                    )
+                                    .foregroundStyle(.orange)
+                                    .lineStyle(StrokeStyle(lineWidth: 1.5))
+                                }
+                            }
+                            .chartXAxisLabel("Step")
+                            .chartYAxisLabel("Latency (ms)")
+                            .chartForegroundStyleScale([
+                                "Model": Color.blue,
+                                "Model + EKF": Color.orange,
+                            ])
+                            .frame(height: 180)
+                            .padding(.horizontal)
+                        }
                     }
 
-                    Button("Reset") { runner.reset() }
+                    // Latency distribution histogram
+                    if runner.latencyHistory.count > 10 {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Latency Distribution")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal)
+
+                            LatencyHistogramView(latencies: runner.latencyHistory)
+                                .frame(height: 140)
+                                .padding(.horizontal)
+                        }
+                    }
+
+                    // IMU sample rate over time
+                    if !runner.sampleRateHistory.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("IMU Sample Rate")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal)
+
+                            Chart(runner.sampleRateHistory.indices, id: \.self) { i in
+                                LineMark(
+                                    x: .value("Step", i),
+                                    y: .value("Hz", runner.sampleRateHistory[i])
+                                )
+                                .foregroundStyle(.cyan)
+                                .lineStyle(StrokeStyle(lineWidth: 1.5))
+
+                                // Target line at 100 Hz
+                                RuleMark(y: .value("Target", 100))
+                                    .foregroundStyle(.secondary.opacity(0.5))
+                                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [5, 5]))
+                            }
+                            .chartXAxisLabel("Step")
+                            .chartYAxisLabel("Hz")
+                            .frame(height: 120)
+                            .padding(.horizontal)
+                        }
+                    }
+
+                    // Stats summary table
+                    if runner.totalInferences > 0 {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Session Statistics")
+                                .font(.subheadline)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal)
+
+                            VStack(spacing: 0) {
+                                StatRow(label: "Mean latency", value: String(format: "%.2f ms", runner.meanLatencyMs))
+                                StatRow(label: "Min latency", value: String(format: "%.2f ms", runner.minLatencyMs))
+                                StatRow(label: "Max latency", value: String(format: "%.2f ms", runner.maxLatencyMs))
+                                StatRow(label: "P99 latency", value: String(format: "%.2f ms", runner.p99LatencyMs))
+                                StatRow(label: "EKF overhead", value: String(format: "%.3f ms", runner.ekfOverheadMs))
+                                StatRow(label: "Throughput", value: String(format: "%.0f FPS", runner.throughputFPS))
+                                StatRow(label: "Total inferences", value: "\(runner.totalInferences)")
+                                StatRow(label: "Dropped windows", value: "\(runner.droppedWindows)",
+                                        valueColor: runner.droppedWindows > 0 ? .red : .primary)
+                            }
+                            .background(Color(.systemGroupedBackground))
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .padding(.horizontal)
+                        }
+                    }
+
+                    // Controls
+                    HStack(spacing: 16) {
+                        if runner.isRunning {
+                            Button("Stop") { runner.stop() }
+                                .buttonStyle(.borderedProminent)
+                                .tint(.red)
+                        } else {
+                            Button("Start") { runner.start() }
+                                .buttonStyle(.borderedProminent)
+                        }
+
+                        Button("Reset") { runner.reset() }
+                            .buttonStyle(.bordered)
+
+                        ShareLink(item: runner.exportCSV() ?? URL(fileURLWithPath: "/dev/null")) {
+                            Label("Export", systemImage: "square.and.arrow.up")
+                        }
                         .buttonStyle(.bordered)
-
-                    ShareLink(item: runner.exportCSV() ?? URL(fileURLWithPath: "/dev/null")) {
-                        Label("Export", systemImage: "square.and.arrow.up")
+                        .disabled(runner.totalInferences == 0)
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(runner.trajectoryPoints.isEmpty)
+                    .padding(.bottom)
                 }
-                .padding(.bottom)
             }
-            .navigationTitle("TartanIMU Live")
+            .navigationTitle("Live Performance")
         }
     }
 }
@@ -95,86 +185,84 @@ struct MetricTile: View {
     var body: some View {
         VStack(spacing: 4) {
             Text(value)
-                .font(.system(.title3, design: .monospaced))
+                .font(.system(.caption, design: .monospaced))
                 .fontWeight(.bold)
                 .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             Text(label)
-                .font(.caption)
+                .font(.caption2)
                 .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity)
     }
 }
 
-// MARK: - Trajectory Canvas
+// MARK: - Stat Row
 
-struct TrajectoryCanvas: View {
-    let points: [SIMD2<Float>]
+struct StatRow: View {
+    let label: String
+    let value: String
+    var valueColor: Color = .primary
 
     var body: some View {
-        Canvas { ctx, size in
-            guard points.count > 1 else {
-                // Draw placeholder text
-                ctx.draw(
-                    Text("Waiting for data...")
-                        .font(.caption)
-                        .foregroundColor(.secondary),
-                    at: CGPoint(x: size.width / 2, y: size.height / 2)
-                )
-                return
-            }
-
-            let margin: CGFloat = 20
-            let drawSize = CGSize(
-                width: size.width - 2 * margin,
-                height: size.height - 2 * margin
-            )
-
-            // Auto-scale to fit all points
-            let xs = points.map(\.x), ys = points.map(\.y)
-            let xMin = xs.min()!, xMax = xs.max()!
-            let yMin = ys.min()!, yMax = ys.max()!
-            let xRange = max(xMax - xMin, 0.001)
-            let yRange = max(yMax - yMin, 0.001)
-
-            // Uniform scaling to preserve aspect ratio
-            let scale = min(Float(drawSize.width) / xRange, Float(drawSize.height) / yRange)
-
-            func toScreen(_ p: SIMD2<Float>) -> CGPoint {
-                CGPoint(
-                    x: margin + CGFloat((p.x - xMin) * scale),
-                    y: size.height - margin - CGFloat((p.y - yMin) * scale)
-                )
-            }
-
-            // Draw path
-            var path = Path()
-            path.move(to: toScreen(points[0]))
-            for p in points.dropFirst() {
-                path.addLine(to: toScreen(p))
-            }
-            ctx.stroke(path, with: .color(.blue), lineWidth: 2)
-
-            // Start marker (green)
-            let startPt = toScreen(points.first!)
-            ctx.fill(
-                Circle().path(in: CGRect(
-                    x: startPt.x - 5, y: startPt.y - 5,
-                    width: 10, height: 10
-                )),
-                with: .color(.green)
-            )
-
-            // Current position marker (red)
-            let endPt = toScreen(points.last!)
-            ctx.fill(
-                Circle().path(in: CGRect(
-                    x: endPt.x - 5, y: endPt.y - 5,
-                    width: 10, height: 10
-                )),
-                with: .color(.red)
-            )
+        HStack {
+            Text(label)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.system(.subheadline, design: .monospaced))
+                .fontWeight(.medium)
+                .foregroundStyle(valueColor)
         }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
     }
+}
+
+// MARK: - Latency Histogram
+
+struct LatencyHistogramView: View {
+    let latencies: [Double]
+
+    var body: some View {
+        let bins = computeBins()
+        Chart(bins, id: \.lowerBound) { bin in
+            BarMark(
+                x: .value("Latency (ms)", String(format: "%.1f", bin.lowerBound)),
+                y: .value("Count", bin.count)
+            )
+            .foregroundStyle(.blue.opacity(0.7))
+        }
+        .chartXAxisLabel("Latency (ms)")
+        .chartYAxisLabel("Count")
+    }
+
+    private func computeBins() -> [HistBin] {
+        guard let lo = latencies.min(), let hi = latencies.max(), hi > lo else {
+            return []
+        }
+
+        let nBins = 15
+        let step = (hi - lo) / Double(nBins)
+        var bins = (0..<nBins).map { i in
+            HistBin(lowerBound: lo + Double(i) * step, count: 0)
+        }
+
+        for v in latencies {
+            var idx = Int((v - lo) / step)
+            idx = min(idx, nBins - 1)
+            bins[idx].count += 1
+        }
+
+        return bins
+    }
+}
+
+struct HistBin {
+    let lowerBound: Double
+    var count: Int
 }
 
 // MARK: - Preview
