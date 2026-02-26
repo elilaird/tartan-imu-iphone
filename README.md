@@ -1,4 +1,4 @@
-# TartanIMU — Usage Guide
+# TartanIMU Benchmarking on iPhone
 
 ## Prerequisites
 
