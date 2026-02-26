@@ -1,4 +1,8 @@
-# TartanIMU — Usage Guide
+# TartanIMU iPhone
+
+PyTorch implementation (guess from paper) of [TartanIMU](https://openaccess.thecvf.com/content/CVPR2025/html/Zhao_Tartan_IMU_A_Light_Foundation_Model_for_Inertial_Positioning_in_CVPR_2025_paper.html), an IMU-based velocity estimator, with CoreML export and an iOS benchmarking app. The model uses a ResNet1D backbone, 2-layer LSTM temporal encoder, and multi-head decoders (car, human, quadruped, drone) to predict 3D velocity with learned uncertainty from raw 6-axis IMU data. Creates a **dummy/untrained model for benchmarking speed only**, an Extended Kalman Filter for state fusion, and a SwiftUI app that captures live IMU data on iPhone and benchmarks inference across ANE/GPU/CPU configurations.
+
+---
 
 ## Prerequisites
 
@@ -155,15 +159,17 @@ python -m pytest tests/ -v
 ### Using the App
 
 **Live Tab:**
-- Tap **Start** to begin capturing IMU data and running inference
-- The trajectory canvas shows dead-reckoned position (green = start, red = current)
-- Metrics bar shows inference latency, FPS, IMU sample rate, and current velocity
-- Tap **Export** to save the trajectory as CSV
+- Tap **Start** to begin capturing IMU data and running inference at 1 Hz
+- Latency time-series chart shows model-only (blue) vs model+EKF (orange) per-step latency
+- Latency histogram shows the distribution of inference times
+- IMU sample rate chart tracks actual capture rate against the 100 Hz target
+- Session statistics table: mean/min/max/P99 latency, EKF overhead, throughput, dropped windows
+- Tap **Export** to save per-step latency data as CSV
 
 **Benchmark Tab:**
 - Tap **Run Benchmark** to test inference across compute unit configurations:
-  - ANE + CPU (FP16)
-  - GPU + CPU (FP16)
+  - All (ANE+GPU+CPU), with and without EKF
+  - ANE+CPU (FP16), with and without EKF
+  - GPU+CPU (FP16)
   - CPU only
-  - All units (ANE + GPU + CPU)
 - Results show mean latency, P99 latency, and throughput (FPS) for each configuration
