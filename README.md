@@ -1,8 +1,9 @@
-# TartanIMU iPhone
+# TartanIMU Benchmarking on iPhone
 
 PyTorch implementation (guess from paper) of [TartanIMU](https://openaccess.thecvf.com/content/CVPR2025/html/Zhao_Tartan_IMU_A_Light_Foundation_Model_for_Inertial_Positioning_in_CVPR_2025_paper.html), an IMU-based velocity estimator, with CoreML export and an iOS benchmarking app. The model uses a ResNet1D backbone, 2-layer LSTM temporal encoder, and multi-head decoders (car, human, quadruped, drone) to predict 3D velocity with learned uncertainty from raw 6-axis IMU data. Creates a **dummy/untrained model for benchmarking speed only**, an Extended Kalman Filter for state fusion, and a SwiftUI app that captures live IMU data on iPhone and benchmarks inference across ANE/GPU/CPU configurations.
 
 ---
+=======
 
 ## Prerequisites
 
