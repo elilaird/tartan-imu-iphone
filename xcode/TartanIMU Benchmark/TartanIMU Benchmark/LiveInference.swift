@@ -27,8 +27,9 @@ class TartanIMURunner: ObservableObject {
     /// Current values
     @Published var inferenceTimeMs: Double = 0
     @Published var ekfInferenceTimeMs: Double = 0
-    @Published var throughputFPS: Double = 0
     @Published var sampleRate: Double = 0
+    /// Actual rate at which inference is called (once per window)
+    @Published var callRateHz: Double = 0
 
     /// Aggregate stats
     @Published var minLatencyMs: Double = .infinity
@@ -38,12 +39,15 @@ class TartanIMURunner: ObservableObject {
     @Published var ekfOverheadMs: Double = 0
     @Published var totalInferences: Int = 0
     @Published var droppedWindows: Int = 0
+    /// How much faster inference is than the window interval
+    @Published var headroomRatio: Double = 0
 
     @Published var isRunning = false
 
     private let historySize = 120
     private var allLatencies: [Double] = []
     private var inferenceInProgress = false
+    private var sessionStartTime: Date?
 
     init() {
         hiddenState = try! MLMultiArray(shape: [2, 1, 512], dataType: .float32)
@@ -95,13 +99,14 @@ class TartanIMURunner: ObservableObject {
         ekf.reset()
         allLatencies = []
         inferenceInProgress = false
+        sessionStartTime = nil
         DispatchQueue.main.async {
             self.latencyHistory = []
             self.ekfLatencyHistory = []
             self.sampleRateHistory = []
             self.inferenceTimeMs = 0
             self.ekfInferenceTimeMs = 0
-            self.throughputFPS = 0
+            self.callRateHz = 0
             self.sampleRate = 0
             self.minLatencyMs = .infinity
             self.maxLatencyMs = 0
@@ -110,6 +115,7 @@ class TartanIMURunner: ObservableObject {
             self.ekfOverheadMs = 0
             self.totalInferences = 0
             self.droppedWindows = 0
+            self.headroomRatio = 0
         }
     }
 
@@ -172,11 +178,21 @@ class TartanIMURunner: ObservableObject {
 
         inferenceInProgress = false
 
+        if sessionStartTime == nil { sessionStartTime = Date() }
+
         DispatchQueue.main.async {
             self.inferenceTimeMs = modelMs
             self.ekfInferenceTimeMs = ekfMs
             self.sampleRate = currentRate
             self.totalInferences += 1
+
+            // Actual call rate: total inferences / elapsed session time
+            if let start = self.sessionStartTime {
+                let elapsed = Date().timeIntervalSince(start)
+                if elapsed > 0 {
+                    self.callRateHz = Double(self.totalInferences) / elapsed
+                }
+            }
 
             // Rolling histories
             self.latencyHistory.append(modelMs)
@@ -197,10 +213,14 @@ class TartanIMURunner: ObservableObject {
             self.minLatencyMs = sorted.first ?? 0
             self.maxLatencyMs = sorted.last ?? 0
             self.meanLatencyMs = sorted.reduce(0, +) / Double(sorted.count)
-            self.throughputFPS = 1000.0 / self.meanLatencyMs
             let p99Idx = min(Int(Double(sorted.count) * 0.99), sorted.count - 1)
             self.p99LatencyMs = sorted[p99Idx]
             self.ekfOverheadMs = ekfMs - modelMs
+
+            // Headroom: how many times faster inference is than the window interval
+            // Window interval = windowSize / sampleRate (e.g. 200/100 = 2 seconds)
+            let windowIntervalMs = Double(200) / max(currentRate, 1.0) * 1000.0
+            self.headroomRatio = windowIntervalMs / self.meanLatencyMs
         }
     }
 

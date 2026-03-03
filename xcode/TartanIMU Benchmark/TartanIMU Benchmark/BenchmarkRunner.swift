@@ -2,10 +2,12 @@ import CoreML
 import Foundation
 import QuartzCore
 
-/// Systematic throughput benchmark across compute unit configurations.
+/// Synthetic throughput benchmark across compute unit configurations.
 ///
-/// Tests: ANE-only FP16, GPU-only FP16, CPU-only FP32, and various batch sizes.
-/// Records: mean latency, p99 latency, and throughput (FPS).
+/// Runs the model in a tight loop (no IMU capture, no UI overhead) to measure
+/// pure inference latency. "Max calls/s" is the theoretical ceiling if the model
+/// ran back-to-back with no waiting — in practice the model only runs once per
+/// 2-second window, so this measures how much headroom is available.
 class BenchmarkRunner: ObservableObject {
 
     struct BenchmarkConfig: Identifiable {
@@ -20,7 +22,7 @@ class BenchmarkRunner: ObservableObject {
         let configName: String
         let meanLatencyMs: Double
         let p99LatencyMs: Double
-        let throughputFPS: Double
+        let maxCallsPerSec: Double
         let iterations: Int
     }
 
@@ -152,7 +154,7 @@ class BenchmarkRunner: ObservableObject {
             configName: config.name,
             meanLatencyMs: mean,
             p99LatencyMs: p99,
-            throughputFPS: fps,
+            maxCallsPerSec: fps,
             iterations: latencies.count
         )
     }

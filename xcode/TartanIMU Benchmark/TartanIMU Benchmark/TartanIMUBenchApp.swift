@@ -72,10 +72,10 @@ struct BenchmarkView: View {
                                             .font(.system(.body, design: .monospaced))
                                     }
                                     VStack(alignment: .leading) {
-                                        Text("FPS")
+                                        Text("Max calls/s")
                                             .font(.caption)
                                             .foregroundStyle(.secondary)
-                                        Text(String(format: "%.0f", result.throughputFPS))
+                                        Text(String(format: "%.0f", result.maxCallsPerSec))
                                             .font(.system(.body, design: .monospaced))
                                             .foregroundStyle(.blue)
                                     }

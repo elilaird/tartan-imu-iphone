@@ -3,7 +3,6 @@
 PyTorch implementation (guess from paper) of [TartanIMU](https://openaccess.thecvf.com/content/CVPR2025/html/Zhao_Tartan_IMU_A_Light_Foundation_Model_for_Inertial_Positioning_in_CVPR_2025_paper.html), an IMU-based velocity estimator, with CoreML export and an iOS benchmarking app. The model uses a ResNet1D backbone, 2-layer LSTM temporal encoder, and multi-head decoders (car, human, quadruped, drone) to predict 3D velocity with learned uncertainty from raw 6-axis IMU data. Creates a **dummy/untrained model for benchmarking speed only**, an Extended Kalman Filter for state fusion, and a SwiftUI app that captures live IMU data on iPhone and benchmarks inference across ANE/GPU/CPU configurations.
 
 ---
-=======
 
 ## Prerequisites
 
@@ -159,18 +158,33 @@ python -m pytest tests/ -v
 
 ### Using the App
 
-**Live Tab:**
-- Tap **Start** to begin capturing IMU data and running inference at 1 Hz
-- Latency time-series chart shows model-only (blue) vs model+EKF (orange) per-step latency
-- Latency histogram shows the distribution of inference times
-- IMU sample rate chart tracks actual capture rate against the 100 Hz target
-- Session statistics table: mean/min/max/P99 latency, EKF overhead, throughput, dropped windows
+The app has two tabs that measure different things:
+
+**Live Tab** — Real-world performance with actual IMU data
+
+The Live tab captures IMU data from the device at 100 Hz and runs the CoreML model once per 200-sample window (~every 2 seconds). It measures how inference performs alongside real sensor capture, data packing, EKF filtering, and UI updates.
+
+- **Model / +EKF**: Latency of the most recent inference call, without and with the EKF predict/update step
+- **Call Rate**: How often inference actually runs (expected ~0.5 Hz for a 200-sample window at 100 Hz)
+- **IMU Rate**: Actual IMU sample delivery rate from CoreMotion (target: 100 Hz)
+- **Latency time-series**: Rolling plot of model-only (blue) vs model+EKF (orange) per-call latency
+- **Latency histogram**: Distribution of inference times over the session
+- **IMU sample rate chart**: Tracks actual capture rate vs the 100 Hz target (dashed line)
+- **Session statistics**:
+  - Mean/min/max/P99 latency across all inference calls
+  - EKF overhead (additional time for the Kalman filter step)
+  - Headroom: how many times faster inference is than the window interval (e.g. "1000x" means inference takes ~2 ms but only needs to finish within ~2000 ms)
+  - Dropped windows: inference calls skipped because the previous one hadn't finished (should be 0)
 - Tap **Export** to save per-step latency data as CSV
 
-**Benchmark Tab:**
-- Tap **Run Benchmark** to test inference across compute unit configurations:
+**Benchmark Tab** — Synthetic peak throughput (tight loop, no IMU)
+
+The Benchmark tab runs the model 100 times back-to-back in a tight loop with random data, no sensor capture, and no UI overhead. This measures the theoretical maximum throughput of the model on each compute unit configuration. The "Max calls/s" number is a ceiling that would never be hit in practice (the model only needs to run ~0.5 times per second), but it's useful for comparing hardware backends.
+
+- Configurations tested:
   - All (ANE+GPU+CPU), with and without EKF
   - ANE+CPU (FP16), with and without EKF
   - GPU+CPU (FP16)
   - CPU only
-- Results show mean latency, P99 latency, and throughput (FPS) for each configuration
+- Results show mean latency, P99 latency, and max calls/s for each configuration
+- The difference between "with EKF" and "without EKF" variants shows the EKF overhead in isolation

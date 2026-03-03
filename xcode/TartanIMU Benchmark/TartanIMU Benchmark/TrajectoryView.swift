@@ -24,13 +24,13 @@ struct TartanIMUDashboard: View {
                             color: .orange
                         )
                         MetricTile(
-                            label: "FPS",
-                            value: String(format: "%.0f", runner.throughputFPS),
+                            label: "Call Rate",
+                            value: String(format: "%.2f Hz", runner.callRateHz),
                             color: .blue
                         )
                         MetricTile(
-                            label: "IMU Hz",
-                            value: String(format: "%.0f", runner.sampleRate),
+                            label: "IMU Rate",
+                            value: String(format: "%.0f Hz", runner.sampleRate),
                             color: .cyan
                         )
                         MetricTile(
@@ -136,7 +136,9 @@ struct TartanIMUDashboard: View {
                                 StatRow(label: "Max latency", value: String(format: "%.2f ms", runner.maxLatencyMs))
                                 StatRow(label: "P99 latency", value: String(format: "%.2f ms", runner.p99LatencyMs))
                                 StatRow(label: "EKF overhead", value: String(format: "%.3f ms", runner.ekfOverheadMs))
-                                StatRow(label: "Throughput", value: String(format: "%.0f FPS", runner.throughputFPS))
+                                StatRow(label: "Headroom", value: String(format: "%.0fx", runner.headroomRatio),
+                                        valueColor: runner.headroomRatio > 10 ? .green : .orange)
+                                StatRow(label: "Call rate", value: String(format: "%.2f Hz", runner.callRateHz))
                                 StatRow(label: "Total inferences", value: "\(runner.totalInferences)")
                                 StatRow(label: "Dropped windows", value: "\(runner.droppedWindows)",
                                         valueColor: runner.droppedWindows > 0 ? .red : .primary)
